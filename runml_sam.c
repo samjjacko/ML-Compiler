@@ -11,7 +11,10 @@
 #define BUFSIZE 1024
 #define IDCOUNT 50
 #define IDSIZE 12
-#define TEMPNAME "temp.c"
+// long random filename to avoid deleting/overwriting meaningful files
+// if a user has a file named "tempqwertyuytrewertytrertyuytrtyu.c" in their 
+// current directory, they deserve to have it deleted :)
+#define TEMPNAME "tempqwertyuytrewertytrertyuytrtyu.c"
 
 // Prints a standard commandline utility program usage message.
 // If `err`, the usage message is printed as an error, and the
@@ -33,6 +36,7 @@ void usage(bool err) {
     fprintf(output, "%c arg0, arg1, ... must be integers (e.g. 1, 3000, ...), ", char_one);
     fprintf(output, "or floating-point numbers (e.g. 3.1415). \n");
     fprintf(output, "%c Args can be signed. \n", char_one);
+    remove(TEMPNAME); // deletes the temporary file constructed
     exit(exit_status);
 }
 
@@ -41,7 +45,7 @@ void usage(bool err) {
 void closeFiles(FILE * c_fp, FILE * ml_fp) {
     fclose(c_fp);
     fclose(ml_fp);
-    remove(TEMPNAME);
+    // remove(TEMPNAME);
 }
 
 void splitByDelim(char *line, char *buffer[BUFSIZE], char sep) {
@@ -187,7 +191,7 @@ void validateArgv(int argc, char * argv[], struct scope_info *scopes, FILE * c_f
         if (!isNumerical(argv[i + 2])) { 
             // non-numeric arg encountered - program terminates accordingly.
             fclose(c_fp);
-            remove(TEMPNAME);
+            // remove(TEMPNAME);
             usage(true);
         }
 
@@ -484,19 +488,14 @@ void configureMain(struct func_attrs *main_func) {
     main_func->header = "main(){\n";
 }
 
-FILE * constructC(char * argv[], int argc) {
-    // i need to allocate memory for 
-    struct scope_info* scopes = initScopes();
+void constructC(char * argv[], int argc, struct scope_info *scopes, FILE *c_fp) {
     // temporary c file to be written to and executed
-    FILE *c_fp = fopen(TEMPNAME, "w"); // to read and write: "w+"
     // the .ml file provided by the path commandline argument
     FILE *ml_fp = fopen(argv[1], "r");
     if (ml_fp == NULL) {
         fprintf(stderr, "! Invalid file path - this file doesn't exist\n");
         closeFiles(c_fp, ml_fp);
     }
-    // Validates and adds cmd arguments to `scopes->glo_scope.ids` 
-    validateArgv(argc, argv, scopes, c_fp);
     // adds required preprocessor directives, such as headerfiles and definitions
     addPreDirectives(argv, c_fp, argc); 
     char line[BUFSIZE]; // to store the line read from the .ml file
@@ -565,26 +564,56 @@ FILE * constructC(char * argv[], int argc) {
             // writes the globally scoped statement straight to the c file
         fprintf(stderr, "@ Unexpected error writing to file %s \n", TEMPNAME);
     }
-    return c_fp;
+}
+
+void compileAndExec(FILE * c_fp) {
+    char cmd[BUFSIZ];
+    int c_name_len = strlen(TEMPNAME);
+    char output[c_name_len + 3];
+    strcpy(output, TEMPNAME);
+    char *ptr = output[c_name_len - 1];
+    sprintf(ptr, ".out");
+
+    sprintf(cmd, "cc -std=c11 -o %s %s", output, TEMPNAME);
+
+    pid_t pid=fork();
+    if (pid==0) { 
+        exec(cmd);
+        exit(127); // command could not be found
+    }
+    else { /* pid!=0; parent process */
+        waitpid(pid,0,0); /* wait for child to exit */
+        close(c_fp);
+        remove(TEMPNAME);
+    }
 }
 
 int main(int argc, char * argv[]) {
-    // Validates commandline arguments, and passes commandline arguments to 
-    // additional functions which construct and execute the required C file. 
-
     // Argument validation
     // prints usage msg via stderr stream
     if (argc < 2) usage(true); 
     //prints usage msg text via stdout stream if --help is called
     if (!strcmp("--help", argv[1])) usage(false); 
 
+    // initialises a structure to store identifiers and the number of identifiers 
+    // for each scope, as well as the currently active scope. 
+    struct scope_info* scopes = initScopes();
+
+    FILE *c_fp = fopen(TEMPNAME, "w"); // to read and write: "w+"
+    if (c_fp == NULL) {
+        fprintf(stderr, "! Error, could not construct temporary c file\n");
+    }
+
+    // Validates and adds cmd arguments to `scopes->glo_scope.ids` 
+    // terminates if invalid arguments are encountered
+    validateArgv(argc, argv, scopes, c_fp);
     // constructs a temporary C program `c_temp` from a valid ml file
-    FILE * c_fp = constructC(argv, argc);
-    fclose(c_fp);
+    constructC(argv, argc, scopes, c_fp);
+    // fclose(c_fp);
     
-    // // compiles `c_path`, executes the file constructed, and then deletes 
-    // // `c_path` and the output file.
-    // compileAndExec(c_path);
+    // compiles `c_path`, executes the file constructed, and then deletes 
+    // `c_path` and the output file.
+    compileAndExec(c_fp);
     return 0;
 }
 
