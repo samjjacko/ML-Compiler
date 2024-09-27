@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "stdlib.h": "c",
+        "complex": "c",
+        "unistd.h": "c",
+        "stdio.h": "c"
+    }
+}
