@@ -44,23 +44,41 @@ void closeFiles(FILE * c_fp, FILE * ml_fp) {
     remove(TEMPNAME);
 }
 
-// splits `line` into substrings seperated by `sep`
-// places pointers to each of the substrings in `buffer`
-// I FUCKING HATE STRTOK!!!!!! I HATE IT!!!!
-void splitByDelim (char *line, char *buffer[BUFSIZE], char sep[]) {
-    char *temp;
-    strcpy(temp, line);
-    char *token;
-    token = strtok(temp, sep);
-    int i = 0;
-    while (token != NULL) {
-        buffer[i] = token;
-        token = strtok(NULL, sep); 
-        i++;
+void splitByDelim(char *line, char *buffer[BUFSIZE], char sep) {
+    char *temp = malloc(strlen(line));
+    strcpy(temp, line); // so we can chop the line up
+    // we will move this pointer around, and point it to the start
+    // of different strings
+    char *ptr = temp;
+    // true if not on a seperator character
+    bool onsubstr = false;
+    int substr_count = 0;
+    for(int i = 0; temp[i] != '\0'; i++) {
+        if(temp[i] == sep) { // substring located
+            // we've come off a substring onto the seperator
+            if(onsubstr) { 
+                temp[i] = '\0'; // make the end of the substring at index i
+                buffer[substr_count] = ptr; // points to the start of this substring
+                ptr = temp + i + 1; // index after the seperator
+                onsubstr = false;
+                substr_count++;
+            } else {
+                // two seperators in a row - skip over them 
+                ptr++; 
+            }
+        } else if (temp[i] == '#'|| temp[i] == '\n') {
+                // no point in checking the rest of the line
+                temp[i] = '\0';
+                break;
+        } else { // normal char 
+            onsubstr = true;
+        }
     }
-    // insert a string representing a null byte, 
-    // so we know when the array ends
-    buffer[i] = "\0";
+    // if the string is terminated without a new seperator at the end, 
+    // the last substring is added. 
+    buffer[substr_count] = ptr; 
+    // adds this to make looping over it later easier
+    buffer[substr_count + 1] = "\0";
 }
 
 struct scope_ids {
@@ -96,7 +114,6 @@ struct func_attrs {
 bool idInScope(char *iden, struct scope_info *scopes) {
     if(scopes->in_func) { // we can check function scope too
         for(int i = 0; i < scopes->func_scope.id_count; i++) {
-            // printf("func scope ids: %s \n", scopes->func_scope.ids[i]);
             if(!strcmp(iden, scopes->func_scope.ids[i])) {
                 return true;
             }
@@ -117,7 +134,7 @@ void addPreDirectives(char * argv[], FILE * c_fp, int argc) {
     // adds this line so we may call `printf`
     char include[] = "#include <stdio.h> \n";
     // Ensures correct types when printing
-    char print_macro[] = "#define print(a) (int) a == a ? fprintf(stdout, \"%d\\n\", (int) a): fprintf(stdout, \"%6f\\n\", a); \n";
+    char print_macro[] = "#define print(a) (int) (a) == (a) ? fprintf(stdout, \"%d\\n\", (int) (a)): fprintf(stdout, \"%6f\\n\", (a)); \n";
     
     // a char array to contain all required preprocessor directives
     // `&cmd_args - ptr` returns the length of `cmd_args` 
@@ -194,6 +211,7 @@ void addToScope(struct scope_info *scopes, char * iden) {
 
     // NEED TO COPY THE VALUES OF THE POINTERS TO ALLOCATED STRINGS
     // WITH DIFFERENT ADDRESSES!! Otherwise they get overwritten???
+    // debugging
     char *temp = malloc(strlen(iden));
     strcpy(temp, iden);
 
@@ -202,7 +220,6 @@ void addToScope(struct scope_info *scopes, char * iden) {
         // scopes->func_scope.ids[count] = malloc(strlen(iden) + 1);
         scopes->func_scope.ids[count] = temp;
         scopes->func_scope.id_count++;
-        // printf("Please god %s \n", scopes->func_scope.ids[count]);
     } else {
         int count = scopes->glo_scope.id_count; //readability
         scopes->glo_scope.ids[count] = temp;
@@ -210,33 +227,44 @@ void addToScope(struct scope_info *scopes, char * iden) {
     }
 }
 
-// works
+void validateIdentifier(char *identif) {
+    for (int i = 0; identif[i] != '\0'; i++) {
+        if(isdigit(identif[i]) || i == 12) {
+            fprintf(stderr, "! Error: invalid identifier \"%s\".\n", identif);
+            fprintf(stderr, "! Identifiers cannot contain numbers, or exceed 12 chars.\n");
+            usage(true);
+        }
+    }
+}
+
 void constructFuncHeader(char *substrs[], struct scope_info *scopes, struct func_attrs *func) {
+    // check that the function identifier is actually valid 
+    validateIdentifier(substrs[1]);
     char argbuffer[BUFSIZE*2]; // because we're adding commas, a type, and a space to each argument
     argbuffer[0] = '\0'; // incase the function has no parameters
     char * argpos = argbuffer;
     int j = 0;
     for(int i = 2; strcmp(substrs[i], "\0"); i++, j++) {
+        // checks that function arguments are well behaved
+        validateIdentifier(substrs[i]);
         // writes a parameter to argbuffer at position argpos
         sprintf(argpos, "float %s, ", substrs[i]); 
         // also write the function parameter to the function's scope
+        // need to check that the argument doesn't terminate with a # or a \n char
         addToScope(scopes, substrs[i]);
-        int pain = scopes->func_scope.id_count;
         argpos += 8 + strlen(substrs[i]); // 8 for "float , "
-        j += 8;
+        j += 7 + strlen(substrs[i]);
     }
+    // should maybe be -3?
     argbuffer[j - 2] = '\0'; // chops off the last comma onwards
     char *function_header = malloc(BUFSIZE);
     // everything but the return type
     sprintf(function_header, "%s(%s) { \n", substrs[1], argbuffer); 
     // return function_header;
     char * identif = malloc(strlen(substrs[1]));
-    // need to copy it!!!
-    // Yep, that was it, it was referring to a bit of the string `line` which was 
-    // being overwritten
     strcpy(identif, substrs[1]);
     func->identif = identif;
-    printf("IDENTIF : %s \n", substrs[1]);
+    // printf("IDENTIF : %s \n", substrs[1]); // debugging
     func->header = function_header;
 }
 
@@ -251,6 +279,9 @@ char * substituteArgs(int start, char *line, struct scope_info *scopes) {
     // case handling
     if(line[start] == '\0' || line[start] == '\n' || line[start] == '#') {
         return "\0"; // ignore this substring
+    }
+    for(int i = 0; line[i] == ' '; i++) {
+        start++;
     }
     char *outstr = malloc(BUFSIZ);
     int j = 0;
@@ -330,7 +361,7 @@ void writeFunc(struct func_attrs *func, FILE * c_fp) {
         fprintf(stderr, "@ Unexpected error writing to file %s \n", TEMPNAME);
     }
     for(int i = 0; i < func->linecount; i++) {
-        printf("%s \n", func->body[i]);
+        // printf("%s \n", func->body[i]); // debugging
         if (fputs(func->body[i], c_fp) == EOF) { // writes each line of the function
             fprintf(stderr, "@ Unexpected error writing to file %s \n", TEMPNAME);
         }
@@ -338,10 +369,20 @@ void writeFunc(struct func_attrs *func, FILE * c_fp) {
 }
 
 void assignment(char *substrs[], struct scope_info *scopes, char line[], char *outline) {
-    addToScope(scopes, substrs[0]); // adds the assigned identifier to the active scope ids
-    int shift = (scopes->in_func)? 8:4;
-    char *assign_exp = substituteArgs(strlen(substrs[0]) + shift, line, scopes);
-    sprintf(outline, "float %s = %s;\n", substrs[0], assign_exp); 
+    char *ptr = substrs[0];
+    for(int i = 0; substrs[0][i] != '\0'; i++) {
+        if (substrs[0][i] == '\t') ptr++;
+        if(isdigit(substrs[0][i]) || i == 12) {
+            fprintf(stderr, "! Error: invalid identifier \"%s\".\n", substrs[0]);
+            fprintf(stderr, "! Identifiers cannot contain numbers, or exceed 12 chars.\n");
+            usage(true);
+        }
+    }
+    addToScope(scopes, ptr); // adds the assigned identifier to the active scope ids
+    // int shift = (scopes->in_func)? 8:4;
+    // char *assign_exp = substituteArgs(strlen(substrs[0]) + shift, line, scopes);
+    char *assign_exp = substituteArgs(strlen(substrs[0]) + 4, line, scopes);
+    sprintf(outline, "float %s = %s;\n", ptr, assign_exp); 
 }
 
 // handles statements (excluding return)
@@ -350,7 +391,8 @@ void handleStat(char *substrs[], struct scope_info *scopes, char *line, struct f
 
     char *outline = malloc(BUFSIZE);
     if (!strcmp(substrs[0], "print") || !strcmp(substrs[0], "\tprint")){
-        char *print_exp = substituteArgs(10, line, scopes);
+        //"print" is 5 letters long
+        char *print_exp = substituteArgs(strlen(substrs[0]), line, scopes);
         sprintf(outline, "\tprint(%s)\n", print_exp);
         addFuncLine(func, outline);
     } else if (!strcmp(substrs[1], "<-")) {
@@ -360,12 +402,23 @@ void handleStat(char *substrs[], struct scope_info *scopes, char *line, struct f
         addFuncLine(func, outline); 
     } else if (substrs[0][0] == '#' || substrs[0][0] == '\n'){
         return;
-    } else { // we must have a function call
-    // there's probably a better way i could've done this
+    } else { 
+        if (!strcmp(substrs[0], "return")) {
+            fprintf(stderr, "! Error: invalid return statement in global scope.\n");
+            usage(true);
+        }
+        // we must have a function call ()
         char temp[IDSIZE]; 
         int siz = strlen(substrs[0]);
         int i = 0;
-        for(; substrs[0][i] != '(' && substrs[0][i] != '\n'; i++) {
+        // don't need to check for '\n' or '#' - these are handled
+        // by splitByDelim()
+        for(; substrs[0][i] != '('; i++) {
+            if(substrs[0][i] == '\0') {
+                fprintf(stderr, "! Error: invalid statement \"%s\". \n", substrs[0]);
+                fprintf(stderr, "! Function calls must follow the format `{name}({args})`\n");
+                usage(true);
+            }
             if (i + 1 == siz) {
                 // throw a tantrum - invalid functioncall
             } else if (i > IDSIZE) {
@@ -376,9 +429,11 @@ void handleStat(char *substrs[], struct scope_info *scopes, char *line, struct f
         char *func_args = substituteArgs(i, line, scopes); // include left bracket - hence
         temp[i] = '\0';
         if (idInScope(temp, scopes)) {
-            sprintf(outline, "%s %s;\n", temp, func_args); 
-            // add it to the body
-            addFuncLine(func, line);
+            sprintf(outline, "%s%s;\n", temp, func_args); 
+            addFuncLine(func, outline); // had a silly bug here
+        } else {
+            fprintf(stderr, "! Error: undeclared function \"%s\". \n", temp);
+            usage(true);
         }
     }
 }
@@ -388,8 +443,9 @@ char * handleGlobStat(char *substrs[], char line[], struct scope_info *scopes, s
     if(!strcmp(substrs[0], "function")) {
         scopes->in_func = true;
         if(func->body != NULL) {
-            // also need to allocate for header and free header...?
             free(func->body);
+            // "reset" the local function scope
+            scopes->func_scope.id_count = 0;
         } 
         *func = def_func; // initialises `func` to a new default
         constructFuncHeader(substrs, scopes, func);
@@ -459,7 +515,7 @@ FILE * constructC(char * argv[], int argc) {
         if (line[0] == '\n' || line[0] == '#') {
             continue;
         }
-        splitByDelim(line, substrs, " "); 
+        splitByDelim(line, substrs, ' '); 
         if (!scopes->in_func) { // in global scope
             // 
             char *globStat = handleGlobStat(substrs, line, scopes, &func, &main_func);
@@ -471,23 +527,8 @@ FILE * constructC(char * argv[], int argc) {
                     fprintf(stderr, "@ Unexpected error writing to file %s \n", TEMPNAME);
                 }
             }
-        } else {
-            // determine the line type in helper method
-            // format in helper methods for each line type 
-            // at the end of the if else chain, write the output string to func body
-            if (!strcmp(substrs[0], "return")) { 
-                // checks arguments and substitutes 0 for undeclared args
-                // sets `ret_exp` to the expression to be returned
-                char * ret_exp = substituteArgs(11, line, scopes);
-                char func_line[BUFSIZE];
-                sprintf(func_line, "\treturn %s;}\n", ret_exp);
-                addFuncLine(&func, func_line);
-                func.type = "float";
-                writeFunc(&func, c_fp); 
-                scopes->in_func = false;
-                printf("FUNC IDENTIFIER: %s \n", func.identif);
-                addToScope(scopes, func.identif); 
-            } else if (line[0] != ' ' && line[0] != '\t') { // function body has finished - no return statement
+        } else { // in function scope
+            if (line[0] != ' ' && line[0] != '\t') { // function body has finished - no return statement
                 // make a function to add to a scope
                 addFuncLine(&func, "}\n");
                 writeFunc(&func, c_fp); // writes the function to TEMPNAME
@@ -498,13 +539,27 @@ FILE * constructC(char * argv[], int argc) {
                 // handles the new statement outside of function scope
                 handleStat(substrs, scopes, line, &main_func);
                 // handleStat(main_func, func, substrs, scopes);
+            } else if (!strcmp(substrs[0], "\treturn") || !strcmp(substrs[0], "return")) { 
+                // checks arguments and substitutes 0 for undeclared args
+                // sets `ret_exp` to the expression to be returned
+                char * ret_exp = substituteArgs(strlen(substrs[0]), line, scopes);
+                char func_line[BUFSIZE];
+                sprintf(func_line, "\treturn %s;}\n", ret_exp);
+                addFuncLine(&func, func_line);
+                func.type = "float";
+                writeFunc(&func, c_fp); 
+                scopes->in_func = false;
+                // printf("FUNC IDENTIFIER: %s \n", func.identif); // debugging
+                addToScope(scopes, func.identif); 
+            } else if (!strcmp(substrs[0], "function") || !strcmp(substrs[0], "\tfunction")) {
+                fprintf(stderr, "! Error: nested functions are not supported in ML. \n");
+                usage(true);
             } else {
                 // handles print statements, assignment statements, and function calls.
                 handleStat(substrs, scopes, line, &func);
             }
         }
     }
-    // printf("%s \n", main_func.body[0]);
     writeFunc(&main_func, c_fp);
     if (fputs("}\n", c_fp) == EOF) { 
             // writes the globally scoped statement straight to the c file
@@ -514,9 +569,6 @@ FILE * constructC(char * argv[], int argc) {
 }
 
 int main(int argc, char * argv[]) {
-    argc = 2;
-    char *argv2[] = {"runml", "./samples/sample5.ml"};
-    argv = argv2;
     // Validates commandline arguments, and passes commandline arguments to 
     // additional functions which construct and execute the required C file. 
 
@@ -535,8 +587,13 @@ int main(int argc, char * argv[]) {
     // compileAndExec(c_path);
     return 0;
 }
-// passes 1, 2, 3, 4, segfaults on 5 for some reason...
-// Not segfaulting on 5, but getting weird values in print statements + no terminating semi-colon
-// really unsure why 5 isn't working
-// Probably because it might be forgetting the arguments in the function header
-// check up on how you're doing that
+
+// ASSUMPTION: 
+/* we cannot have something like
+    ```
+    hi <- 3 + 5000
+    x <- hi + 3
+    ```
+in the global scope, because "hi" is not a constant. 
+To do this sort of operation, it is expected a user will use a function instead
+*/
