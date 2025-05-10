@@ -1,9 +1,5 @@
 ### Project Description:
-See [here](https://teaching.csse.uwa.edu.au/units/CITS2002/projects/project1.php)
-
-
-## The *ml* syntax
-According to [CSSE](https://teaching.csse.uwa.edu.au/units/CITS2002/projects/project1-syntax.php):
+According to CSSE:
 >   `|`       means a choice
 >   `[...]`   means zero or one
 >   `(...)*`  means zero or more
